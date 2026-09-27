@@ -1,0 +1,122 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    if: |
+      github.event.issue.user.type != 'Bot' &&
+      (
+        github.event.action == 'opened' ||
+        (github.event.action == 'edited' && (github.event.changes.title || github.event.changes.body))
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure triage labels exist
+        run: |
+          set -e
+          create_label() {
+            gh label create "$1" --color "$2" --description "$3" --force
+          }
+          create_label "area:gameplay" "1D76DB" "Movimiento, rotación, colisión, caída de piezas"
+          create_label "area:scoring" "0E8A16" "Puntaje, líneas completadas, nivel"
+          create_label "area:ui" "FBCA04" "HUD, overlay, estilos, colores, canvas"
+          create_label "area:controls" "5319E7" "Entrada de teclado / controles"
+          create_label "area:infra" "C5DEF5" "Workflows, documentación, tooling del repo"
+          create_label "priority:high" "B60205" "Bloquea o rompe el juego"
+          create_label "priority:medium" "D93F0B" "Afecta la experiencia pero no bloquea"
+          create_label "priority:low" "FEF2C0" "Cosmético o menor"
+          create_label "triaged" "BFD4F2" "Ya analizado automáticamente por Claude"
+
+      - name: Run Claude Code triage
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Read,Glob,Grep,Write,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh label list:*)"'
+          prompt: |
+            Estás analizando el issue #${{ env.ISSUE_NUMBER }} del repositorio ${{ env.REPO }}
+            (un juego de Tetris en JavaScript vanilla, ver CLAUDE.md para la arquitectura).
+
+            1. Lee el issue completo:
+               gh issue view ${{ env.ISSUE_NUMBER }} --json title,body,labels,comments
+
+            2. Lee CLAUDE.md y el código relevante (index.html, style.css, game.js) para
+               entender qué función o parte del sistema está probablemente involucrada.
+
+            3. Clasifica el issue y aplica labels con `gh issue edit ${{ env.ISSUE_NUMBER }} --add-label ... --remove-label ...`:
+               - Un label de TIPO existente: bug, enhancement, documentation, question,
+                 duplicate, invalid, good first issue, help wanted, wontfix (el que mejor aplique).
+               - Uno o más labels de ÁREA: area:gameplay, area:scoring, area:ui, area:controls,
+                 area:infra.
+               - Un label de PRIORIDAD: priority:high, priority:medium, priority:low.
+               - Agrega siempre el label `triaged`.
+               Si el issue ya tenía labels de área/prioridad/tipo gestionados por este workflow
+               que ya no correspondan (por ejemplo tras una edición), quítalos con --remove-label.
+               Nunca toques labels que no sean parte de este esquema (por ejemplo labels puestos
+               manualmente que no calzan en las categorías anteriores).
+
+            4. Escribe un diagnóstico técnico en un archivo llamado `triage-comment.md`
+               (NO lo commitees, es solo para que un paso posterior lo publique como comentario).
+               La PRIMERA línea debe ser exactamente:
+               <!-- claude-issue-triage -->
+               Luego, en español, con este formato markdown:
+
+               ## Diagnóstico automático
+
+               **Resumen**: (1-2 frases resumiendo el problema o la solicitud)
+
+               **Clasificación**: tipo, área(s) y prioridad elegidos, con una breve justificación.
+
+               **Análisis técnico**: qué archivos/funciones de game.js, index.html o style.css
+               están probablemente involucrados (cita nombres de función y, si puedes, líneas
+               aproximadas), y una hipótesis de causa raíz si es un bug.
+
+               **Propuesta de solución**: pasos concretos sugeridos para implementar el fix o
+               la feature, referenciando los mecanismos existentes descritos en CLAUDE.md
+               (por ejemplo tryRotate, collide, clearLines, ghostY, etc.) cuando aplique.
+
+               **Cómo verificar**: cómo comprobar que la solución funciona (qué probar
+               manualmente en el navegador).
+
+               **Preguntas abiertas**: información faltante o ambigüedades, si las hay
+               (o "Ninguna" si el issue es claro).
+
+               No modifiques ningún archivo del juego ni abras pull requests: tu única
+               tarea es clasificar el issue y escribir el diagnóstico.
+
+      - name: Publish or update triage comment
+        run: |
+          set -e
+          if [ ! -f triage-comment.md ]; then
+            echo "::error::triage-comment.md no fue generado por Claude; no se puede publicar el diagnóstico."
+            exit 1
+          fi
+
+          existing_id=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- claude-issue-triage -->")) | .id' | head -1)
+
+          if [ -n "$existing_id" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" -F body=@triage-comment.md
+          else
+            gh issue comment "${ISSUE_NUMBER}" --body-file triage-comment.md
+          fi
