@@ -77,6 +77,10 @@ jobs:
 
             4. Escribe un diagnóstico técnico en un archivo llamado `triage-comment.md`
                (NO lo commitees, es solo para que un paso posterior lo publique como comentario).
+                El contenido debe estar en formato Markdown válido y bien interpretable por
+               GitHub (encabezados, negritas, listas, bloques de código, etc. usando la
+               sintaxis que GitHub renderiza correctamente en comentarios de issues), ya que
+               se publicará tal cual como comentario del issue.
                La PRIMERA línea debe ser exactamente:
                <!-- claude-issue-triage -->
                Luego, en español, con este formato markdown:
