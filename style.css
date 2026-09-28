@@ -242,6 +242,10 @@ kbd {
   color: var(--overlay-title);
 }
 
+#overlay-title .letter-u {
+  color: gray;
+}
+
 #overlay-score {
   font-family: 'Courier New', Courier, monospace;
   font-size: 14px;

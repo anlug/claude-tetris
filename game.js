@@ -241,7 +241,7 @@ function togglePause() {
     loop(lastTime);
   } else {
     cancelAnimationFrame(animId);
-    overlayTitle.textContent = 'PAUSA';
+    overlayTitle.innerHTML = 'PA<span class="letter-u">U</span>SA';
     overlayScore.textContent = '';
     overlay.classList.remove('hidden');
   }
